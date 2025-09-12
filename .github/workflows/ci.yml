@@ -20,14 +20,15 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      - name: Verify environment and imports
+      - name: Verify environment and imports (no secrets required)
         run: |
           python - <<'PY'
           import os
-          assert os.getenv('OPENAI_API_KEY'), 'OPENAI_API_KEY not set in env'
           import streamlit, openai
+          has_key = bool(os.getenv('OPENAI_API_KEY'))
+          if not has_key:
+            print('NOTE: OPENAI_API_KEY not set; skipping key-dependent checks')
           print('streamlit', streamlit.__version__)
           print('openai', getattr(openai, '__version__', 'legacy'))
           print('OK')
           PY
-

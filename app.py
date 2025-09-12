@@ -23,6 +23,9 @@ import time
 import datetime as dt
 
 import streamlit as st
+import streamlit.components.v1 as components
+import json
+import uuid
 
 # Optional: load .env if python-dotenv is installed
 try:  # pragma: no cover - optional convenience
@@ -223,17 +226,18 @@ def main() -> None:
             pass
 
     with st.form(key="missy-form", clear_on_submit=False):
-        topic = st.text_input(
+        topic = st.text_area(
             "Payoff or main topic*",
-            placeholder="e.g., How to save 50% on taxes",
-            help="The core payoff or idea the video leads to. Required.",
+            placeholder="Describe the payoff or main topic \nE.g., This is why you need to vote for Proposition 50 on Nov 4th, 2025.",
+            help="The core payoff or idea the video leads to. You can write a short paragraph.",
+            height=120,  # ~4 lines before scrolling
         ).strip()
 
         length_s = st.number_input(
             "Approximate length (seconds)",
             min_value=6,
             max_value=600,
-            value=60,
+            value=30,
             step=3,
             help="Used to size the number of 3-second beats.",
         )
@@ -287,7 +291,41 @@ streamlit run app.py
                 return
 
         st.subheader("Generated Script")
+        # Copy buttons above and below the output
+        def render_copy_button(text: str, label: str = "Copy script") -> None:
+            btn_id = f"copybtn-{uuid.uuid4().hex}"
+            safe_text = json.dumps(text or "")
+            safe_label = json.dumps(label)
+            components.html(
+                f"""
+                <div style='margin: 0.25rem 0 0.5rem 0;'>
+                  <button id='{btn_id}' style='padding:6px 10px; border-radius:6px; border:1px solid #ccc; cursor:pointer;'>
+                    {label}
+                  </button>
+                </div>
+                <script>
+                  const btn = document.getElementById('{btn_id}');
+                  if (btn) {{
+                    const original = {safe_label};
+                    btn.addEventListener('click', async () => {{
+                      try {{
+                        await navigator.clipboard.writeText({safe_text});
+                        btn.innerText = 'Copied!';
+                        setTimeout(() => btn.innerText = original, 1200);
+                      }} catch (e) {{
+                        btn.innerText = 'Copy failed';
+                        setTimeout(() => btn.innerText = original, 1500);
+                      }}
+                    }});
+                  }}
+                </script>
+                """,
+                height=60,
+            )
+
+        render_copy_button(script)
         st.markdown(script or "(No content returned)")
+        render_copy_button(script)
 
         st.divider()
         st.caption(
