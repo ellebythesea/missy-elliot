@@ -233,7 +233,7 @@ def main() -> None:
             "Approximate length (seconds)",
             min_value=6,
             max_value=600,
-            value=60,
+            value=30,
             step=3,
             help="Used to size the number of 3-second beats.",
         )
