@@ -23,6 +23,9 @@ import time
 import datetime as dt
 
 import streamlit as st
+import streamlit.components.v1 as components
+import json
+import uuid
 
 # Optional: load .env if python-dotenv is installed
 try:  # pragma: no cover - optional convenience
@@ -287,7 +290,41 @@ streamlit run app.py
                 return
 
         st.subheader("Generated Script")
+        # Copy buttons above and below the output
+        def render_copy_button(text: str, label: str = "Copy script") -> None:
+            btn_id = f"copybtn-{uuid.uuid4().hex}"
+            safe_text = json.dumps(text or "")
+            safe_label = json.dumps(label)
+            components.html(
+                f"""
+                <div style='margin: 0.25rem 0 0.5rem 0;'>
+                  <button id='{btn_id}' style='padding:6px 10px; border-radius:6px; border:1px solid #ccc; cursor:pointer;'>
+                    {label}
+                  </button>
+                </div>
+                <script>
+                  const btn = document.getElementById('{btn_id}');
+                  if (btn) {{
+                    const original = {safe_label};
+                    btn.addEventListener('click', async () => {{
+                      try {{
+                        await navigator.clipboard.writeText({safe_text});
+                        btn.innerText = 'Copied!';
+                        setTimeout(() => btn.innerText = original, 1200);
+                      }} catch (e) {{
+                        btn.innerText = 'Copy failed';
+                        setTimeout(() => btn.innerText = original, 1500);
+                      }}
+                    }});
+                  }}
+                </script>
+                """,
+                height=60,
+            )
+
+        render_copy_button(script)
         st.markdown(script or "(No content returned)")
+        render_copy_button(script)
 
         st.divider()
         st.caption(
