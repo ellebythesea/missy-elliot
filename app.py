@@ -226,10 +226,11 @@ def main() -> None:
             pass
 
     with st.form(key="missy-form", clear_on_submit=False):
-        topic = st.text_input(
+        topic = st.text_area(
             "Payoff or main topic*",
-            placeholder="e.g., How to save 50% on taxes",
-            help="The core payoff or idea the video leads to. Required.",
+            placeholder="Describe the payoff or main topic \nE.g., This is why you need to vote for Proposition 50 on Nov 4th, 2025.",
+            help="The core payoff or idea the video leads to. You can write a short paragraph.",
+            height=120,  # ~4 lines before scrolling
         ).strip()
 
         length_s = st.number_input(
