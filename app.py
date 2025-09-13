@@ -263,25 +263,31 @@ def _transcribe_via_whisper(client, audio_path: Path) -> str | None:
     return None
 
 
-def _enrich_context_with_google(api_key: str, query: str) -> list[dict]:
-    """Use Google Knowledge Graph Search API to fetch brief descriptions.
+def _enrich_context_with_serp(api_key: str, query: str) -> list[dict]:
+    """Use SerpAPI (Google Search) to fetch top organic results.
 
     Returns a list of {name, description, url} dicts (up to 3), or empty.
     """
     try:
-        from googleapiclient.discovery import build  # type: ignore
+        from serpapi import GoogleSearch  # type: ignore
 
-        service = build("kgsearch", "v1", developerKey=api_key, cache_discovery=False)
-        req = service.entities().search(query=query, limit=3, indent=True, languages=["en"])  # type: ignore
-        resp = req.execute()
+        params = {
+            "engine": "google",
+            "q": query,
+            "api_key": api_key,
+            "num": 5,
+            "hl": "en",
+            "safe": "active",
+        }
+        search = GoogleSearch(params)
+        results = search.get_dict()
         out: list[dict] = []
-        for item in resp.get("itemListElement", [])[:3]:
-            ent = item.get("result", {})
+        for item in results.get("organic_results", [])[:3]:
             out.append(
                 {
-                    "name": ent.get("name"),
-                    "description": ent.get("description"),
-                    "url": (ent.get("detailedDescription", {}) or {}).get("url"),
+                    "name": item.get("title"),
+                    "description": item.get("snippet"),
+                    "url": item.get("link"),
                 }
             )
         return out
@@ -610,16 +616,16 @@ streamlit run app.py
                 st.error("Transcription failed. Try another URL or check dependencies.")
                 st.stop()
 
-            # Optional: Google context enrichment
-            gkey = os.getenv("GOOGLE_API_KEY", "")
+            # Optional: SerpAPI context enrichment
+            gkey = os.getenv("SERPAPI_API_KEY", "")
             enriched_bits = []
             if gkey:
                 query = f"{speaker} {ctx}".strip() or speaker or ctx or ""
                 if query:
-                    enriched_bits = _enrich_context_with_google(gkey, query)
+                    enriched_bits = _enrich_context_with_serp(gkey, query)
 
             if enriched_bits:
-                with st.expander("Context enrichment (Google)"):
+                with st.expander("Context enrichment (Search)"):
                     for item in enriched_bits:
                         line = f"- {item.get('name') or ''}: {item.get('description') or ''}"
                         if item.get("url"):
