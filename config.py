@@ -8,12 +8,11 @@ from __future__ import annotations
 
 import os
 
-# Model to use for chat completions
-MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
+# Model to use for chat completions (cost-efficient default)
+MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 # Sampling temperature
 try:
     TEMPERATURE = float(os.getenv("OPENAI_TEMPERATURE", "0.8"))
 except ValueError:
     TEMPERATURE = 0.8
-

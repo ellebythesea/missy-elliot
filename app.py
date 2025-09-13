@@ -21,6 +21,10 @@ import hashlib
 import base64
 import time
 import datetime as dt
+import tempfile
+from pathlib import Path
+import re
+from urllib.parse import urlparse, parse_qs
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -57,7 +61,7 @@ except Exception:
     _HAS_STX = False
 
 
-APP_TITLE = "Missy Elliott Style Viral Video Script Generator"
+APP_TITLE = "Viral Video Script Generator"
 
 
 def get_openai_client(api_key: str):
@@ -110,11 +114,219 @@ def call_openai(
 
     
 
+# ----------------------
+# Logical Fallacy helpers
+# ----------------------
+
+YOUTUBE_HOSTS = {"www.youtube.com", "youtube.com", "m.youtube.com", "youtu.be"}
+INSTAGRAM_HOSTS = {"www.instagram.com", "instagram.com", "m.instagram.com"}
+
+
+def _is_url(url: str) -> bool:
+    try:
+        p = urlparse(url)
+        return p.scheme in {"http", "https"} and bool(p.netloc)
+    except Exception:
+        return False
+
+
+def _is_youtube(url: str) -> bool:
+    try:
+        return urlparse(url).netloc.replace(" ", "").lower() in YOUTUBE_HOSTS
+    except Exception:
+        return False
+
+
+def _extract_youtube_id(url: str) -> str | None:
+    try:
+        p = urlparse(url)
+        host = p.netloc.lower()
+        if host == "youtu.be":
+            vid = p.path.lstrip("/")
+            return vid or None
+        if "watch" in p.path:
+            q = parse_qs(p.query)
+            vid = q.get("v", [None])[0]
+            return vid
+        # Shorts or other formats
+        m = re.search(r"/(shorts|embed)/([\w-]{6,})", p.path)
+        if m:
+            return m.group(2)
+    except Exception:
+        pass
+    return None
+
+
+def _get_video_duration_seconds(url: str) -> int | None:
+    """Use yt-dlp to fetch metadata and return duration in seconds (or None)."""
+    try:
+        import yt_dlp  # type: ignore
+
+        ydl_opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "skip_download": True,
+            "ignoreerrors": True,
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            if not info:
+                return None
+            # Some extractors nest info in 'entries'
+            if "entries" in info and info["entries"]:
+                info = info["entries"][0]
+            return int(info.get("duration")) if info.get("duration") else None
+    except ImportError:
+        st.warning("Package 'yt-dlp' is not installed. Install it to enable duration checks.")
+    except Exception:
+        return None
+    return None
+
+
+def _try_youtube_transcript(url: str) -> str | None:
+    """Try using youtube-transcript-api. Returns transcript text or None."""
+    vid = _extract_youtube_id(url)
+    if not vid:
+        return None
+    try:
+        from youtube_transcript_api import YouTubeTranscriptApi  # type: ignore
+
+        # Prefer English; allow auto-generated
+        segments = YouTubeTranscriptApi.get_transcript(vid, languages=["en", "en-US"])
+        text = " ".join([s.get("text", "").strip() for s in segments if s.get("text")])
+        return re.sub(r"\s+", " ", text).strip()
+    except Exception:
+        return None
+
+
+def _download_audio_with_ytdlp(url: str) -> Path | None:
+    """Download audio to a temp file using yt-dlp and return the path."""
+    try:
+        import yt_dlp  # type: ignore
+
+        tempdir = Path(tempfile.mkdtemp(prefix="lf_audio_"))
+        outtmpl = str(tempdir / "%(id)s.%(ext)s")
+        ydl_opts = {
+            "format": "bestaudio/best",
+            "outtmpl": outtmpl,
+            "postprocessors": [
+                {
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "mp3",
+                    "preferredquality": "192",
+                }
+            ],
+            "quiet": True,
+            "no_warnings": True,
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            if not info:
+                return None
+            # After postprocess, resulting file extension is mp3
+            base = info.get("id") or "audio"
+            audio_path = next((p for p in tempdir.glob(f"{base}.*") if p.suffix.lower() in {".mp3", ".m4a", ".aac", ".wav"}), None)
+            return audio_path
+    except ImportError:
+        st.warning("Package 'yt-dlp' is not installed. Install it to enable audio download.")
+    except Exception:
+        return None
+    return None
+
+
+def _transcribe_via_whisper(client, audio_path: Path) -> str | None:
+    """Transcribe audio using OpenAI Whisper with new or legacy SDKs."""
+    try:
+        # New SDK
+        if _HAS_NEW_OPENAI:
+            with open(audio_path, "rb") as f:
+                resp = client.audio.transcriptions.create(model="whisper-1", file=f)
+            # New SDK returns an object with text
+            text = getattr(resp, "text", None)
+            if text:
+                return text.strip()
+        else:  # Legacy fallback
+            with open(audio_path, "rb") as f:
+                try:
+                    resp = client.Audio.transcriptions.create(model="whisper-1", file=f)
+                    text = resp.get("text") if isinstance(resp, dict) else getattr(resp, "text", None)
+                    if text:
+                        return text.strip()
+                except Exception:
+                    f.seek(0)
+                    resp = client.Audio.transcribe("whisper-1", f)
+                    text = resp.get("text") if isinstance(resp, dict) else getattr(resp, "text", None)
+                    if text:
+                        return text.strip()
+    except Exception:
+        return None
+    return None
+
+
+def _enrich_context_with_google(api_key: str, query: str) -> list[dict]:
+    """Use Google Knowledge Graph Search API to fetch brief descriptions.
+
+    Returns a list of {name, description, url} dicts (up to 3), or empty.
+    """
+    try:
+        from googleapiclient.discovery import build  # type: ignore
+
+        service = build("kgsearch", "v1", developerKey=api_key, cache_discovery=False)
+        req = service.entities().search(query=query, limit=3, indent=True, languages=["en"])  # type: ignore
+        resp = req.execute()
+        out: list[dict] = []
+        for item in resp.get("itemListElement", [])[:3]:
+            ent = item.get("result", {})
+            out.append(
+                {
+                    "name": ent.get("name"),
+                    "description": ent.get("description"),
+                    "url": (ent.get("detailedDescription", {}) or {}).get("url"),
+                }
+            )
+        return out
+    except Exception:
+        return []
+
+
+def _analyze_transcript(client, transcript: str, speaker: str, context: str, fallacy_filter: str) -> str:
+    """Use gpt-4o-mini to extract quotes, issues, and good responses."""
+    max_chars = 12000
+    tx = transcript.strip()
+    if len(tx) > max_chars:
+        tx = tx[:max_chars] + "..."
+
+    system_prompt = (
+        "You analyze speech for misinformation, divisive rhetoric, and logical fallacies. "
+        "Identify exact quotes (verbatim) and classify issues. Be concise and precise."
+    )
+
+    filter_line = (
+        "Analyze all fallacies and issues." if fallacy_filter == "All (auto-detect)" else f"Focus on: {fallacy_filter}."
+    )
+
+    user_prompt = (
+        f"Speaker: {speaker or 'Unknown'}\n"
+        f"Context: {context or 'None provided'}\n"
+        f"Guidance: {filter_line}\n"
+        "Output 3–7 findings. For each, use exactly this format on separate blocks:\n"
+        "Quote: [exact quote]\n"
+        "Issue: [logical fallacy/divisive rhetoric/lie — brief explanation]\n"
+        "Good Response: [concise, factual counterargument]\n\n"
+        "Transcript to analyze:\n" + tx
+    )
+
+    try:
+        result = call_openai(client, system_prompt, user_prompt)
+        return result.strip()
+    except Exception as e:
+        return f"Analysis failed: {e}"
+
 
 def main() -> None:
     st.set_page_config(page_title=APP_TITLE, page_icon="🎬", layout="centered")
     st.title(APP_TITLE)
-    st.caption("Design every beat in reverse to keep viewers watching.")
+    st.caption("Design in reverse. Analyze rhetoric. Ship better videos.")
     with st.expander("What is the Missy Elliott method?"):
         st.markdown(
             """
@@ -225,112 +437,200 @@ def main() -> None:
         except Exception:
             pass
 
-    with st.form(key="missy-form", clear_on_submit=False):
-        topic = st.text_area(
-            "Payoff or main topic*",
-            placeholder="Describe the payoff or main topic \nE.g., This is why you need to vote for Proposition 50 on Nov 4th, 2025.",
-            help="The core payoff or idea the video leads to. You can write a short paragraph.",
-            height=120,  # ~4 lines before scrolling
-        ).strip()
+    # Mode switch
+    st.selectbox(
+        "Mode",
+        options=[
+            "Missy Elliott",
+            "Logical Fallacy",
+        ],
+        index=0,
+        key="_mode",
+        help="Choose 'Missy Elliott' to generate 3‑second‑beat scripts, or 'Logical Fallacy' to analyze a video transcript for rhetorical issues.",
+    )
 
-        length_s = st.number_input(
-            "Approximate length (seconds)",
-            min_value=6,
-            max_value=600,
-            value=30,
-            step=3,
-            help="Used to size the number of 3-second beats.",
-        )
+    if st.session_state.get("_mode") == "Missy Elliott":
+        with st.form(key="missy-form", clear_on_submit=False):
+            topic = st.text_area(
+                "Payoff or main topic*",
+                placeholder="Describe the payoff or main topic \nE.g., This is why you need to vote for Proposition 50 on Nov 4th, 2025.",
+                help="The core payoff or idea the video leads to. You can write a short paragraph.",
+                height=120,
+            ).strip()
 
-        style = st.selectbox(
-            "Video style (optional)",
-            options=["Educational", "Recipe", "Comedy", "Motivational", "Other"],
-            index=0,
-        )
-
-        submitted = st.form_submit_button("Generate Script ✨")
-
-    if submitted:
-        if not topic:
-            st.error("Please enter the video's payoff or main topic.")
-            st.stop()
-
-        if not api_key:
-            st.error(
-                "Missing OPENAI_API_KEY environment variable. Set it and rerun the app."
+            length_s = st.number_input(
+                "Approximate length (seconds)",
+                min_value=6,
+                max_value=600,
+                value=30,
+                step=3,
+                help="Used to size the number of 3-second beats.",
             )
-            with st.expander("How to set OPENAI_API_KEY"):
-                st.code(
-                    """
+
+            style = st.selectbox(
+                "Video style (optional)",
+                options=["Educational", "Recipe", "Comedy", "Motivational", "Other"],
+                index=0,
+            )
+
+            submitted = st.form_submit_button("Generate Script ✨")
+
+        if submitted:
+            if not topic:
+                st.error("Please enter the video's payoff or main topic.")
+                st.stop()
+
+            if not api_key:
+                st.error("Missing OPENAI_API_KEY environment variable. Set it and rerun the app.")
+                with st.expander("How to set OPENAI_API_KEY"):
+                    st.code(
+                        """
 export OPENAI_API_KEY='sk-...'
 streamlit run app.py
-                    """.strip(),
-                    language="bash",
-                )
-                st.markdown(
-                    "- Or set it in Streamlit Cloud: App settings → Secrets or Environment variables\n"
-                    "- Or add it to a local `.env` file (see `.env.example`)"
-                )
-            st.stop()
+                        """.strip(),
+                        language="bash",
+                    )
+                    st.markdown(
+                        "- Or set it in Streamlit Cloud: App settings → Secrets or Environment variables\n"
+                        "- Or add it to a local `.env` file (see `.env.example`)"
+                    )
+                st.stop()
 
-        with st.spinner("Generating your Missy Elliott style script..."):
-            try:
-                client = get_openai_client(api_key)
-                system_prompt = MISSY_METHOD_PROMPT
-                user_prompt = build_user_prompt(topic, style, int(length_s))
-                script = call_openai(
-                    client,
-                    system_prompt,
-                    user_prompt,
-                    model=DEFAULT_MODEL,
-                    temperature=TEMPERATURE,
-                )
-            except Exception as e:  # Broad catch to show a friendly error
-                st.error("There was an error generating the script. Please try again.")
-                st.caption(f"Details: {e}")
-                return
+            with st.spinner("Generating your Missy Elliott style script..."):
+                try:
+                    client = get_openai_client(api_key)
+                    system_prompt = MISSY_METHOD_PROMPT
+                    user_prompt = build_user_prompt(topic, style, int(length_s))
+                    script = call_openai(
+                        client,
+                        system_prompt,
+                        user_prompt,
+                        model=DEFAULT_MODEL,
+                        temperature=TEMPERATURE,
+                    )
+                except Exception as e:  # Broad catch to show a friendly error
+                    st.error("There was an error generating the script. Please try again.")
+                    st.caption(f"Details: {e}")
+                    return
 
-        st.subheader("Generated Script")
-        # Copy buttons above and below the output
-        def render_copy_button(text: str, label: str = "Copy script") -> None:
-            btn_id = f"copybtn-{uuid.uuid4().hex}"
-            safe_text = json.dumps(text or "")
-            safe_label = json.dumps(label)
-            components.html(
-                f"""
-                <div style='margin: 0.25rem 0 0.5rem 0;'>
-                  <button id='{btn_id}' style='padding:6px 10px; border-radius:6px; border:1px solid #ccc; cursor:pointer;'>
-                    {label}
-                  </button>
-                </div>
-                <script>
-                  const btn = document.getElementById('{btn_id}');
-                  if (btn) {{
-                    const original = {safe_label};
-                    btn.addEventListener('click', async () => {{
-                      try {{
-                        await navigator.clipboard.writeText({safe_text});
-                        btn.innerText = 'Copied!';
-                        setTimeout(() => btn.innerText = original, 1200);
-                      }} catch (e) {{
-                        btn.innerText = 'Copy failed';
-                        setTimeout(() => btn.innerText = original, 1500);
+            st.subheader("Generated Script")
+
+            def render_copy_button(text: str, label: str = "Copy script") -> None:
+                btn_id = f"copybtn-{uuid.uuid4().hex}"
+                safe_text = json.dumps(text or "")
+                safe_label = json.dumps(label)
+                components.html(
+                    f"""
+                    <div style='margin: 0.25rem 0 0.5rem 0;'>
+                      <button id='{btn_id}' style='padding:6px 10px; border-radius:6px; border:1px solid #ccc; cursor:pointer;'>
+                        {label}
+                      </button>
+                    </div>
+                    <script>
+                      const btn = document.getElementById('{btn_id}');
+                      if (btn) {{
+                        const original = {safe_label};
+                        btn.addEventListener('click', async () => {{
+                          try {{
+                            await navigator.clipboard.writeText({safe_text});
+                            btn.innerText = 'Copied!';
+                            setTimeout(() => btn.innerText = original, 1200);
+                          }} catch (e) {{
+                            btn.innerText = 'Copy failed';
+                            setTimeout(() => btn.innerText = original, 1500);
+                          }}
+                        }});
                       }}
-                    }});
-                  }}
-                </script>
-                """,
-                height=60,
+                    </script>
+                    """,
+                    height=60,
+                )
+
+            render_copy_button(script)
+            st.markdown(script or "(No content returned)")
+            render_copy_button(script)
+
+            st.divider()
+            st.caption("Pro tip: Iterate by tightening the first 3–6 seconds until it's irresistible.")
+    else:
+        st.caption("Analyze a video for logical fallacies, divisive rhetoric, and misleading claims.")
+        with st.form(key="logical-fallacy-form", clear_on_submit=False):
+            url = st.text_input("YouTube or Instagram URL*", placeholder="https://www.youtube.com/watch?v=...")
+            speaker = st.text_input("Speaker's name", placeholder="e.g., John Doe")
+            ctx = st.text_area(
+                "Context (optional)",
+                placeholder="Recent event, topic, or any helpful context",
+                height=100,
             )
+            fallacy = st.selectbox(
+                "Logical fallacy focus",
+                options=[
+                    "All (auto-detect)",
+                    "Ad Hominem",
+                    "Strawman",
+                    "False Dichotomy",
+                    "Appeal to Emotion",
+                    "Slippery Slope",
+                ],
+                index=0,
+            )
+            submitted = st.form_submit_button("Analyze Video")
 
-        render_copy_button(script)
-        st.markdown(script or "(No content returned)")
-        render_copy_button(script)
+        if submitted:
+            if not url or not _is_url(url):
+                st.error("Please enter a valid YouTube or Instagram URL.")
+                st.stop()
 
-        st.divider()
-        st.caption(
-            "Pro tip: Iterate by tightening the first 3–6 seconds until it's irresistible."
-        )
+            # Duration check (<= 5 minutes)
+            dur = _get_video_duration_seconds(url)
+            if dur is None:
+                st.info("Could not determine video duration; proceeding cautiously.")
+            elif dur > 300:
+                st.warning("Video is longer than 5 minutes. Please choose a shorter clip.")
+                st.stop()
+
+            if not api_key:
+                st.error("Missing OPENAI_API_KEY environment variable. Set it and rerun the app.")
+                st.stop()
+
+            client = get_openai_client(api_key)
+
+            transcript_text: str | None = None
+            with st.spinner("Transcribing audio..."):
+                if _is_youtube(url):
+                    transcript_text = _try_youtube_transcript(url)
+                if not transcript_text:
+                    audio_path = _download_audio_with_ytdlp(url)
+                    if not audio_path or not audio_path.exists():
+                        st.error("Failed to download audio for transcription. Ensure the URL is public.")
+                        st.stop()
+                    transcript_text = _transcribe_via_whisper(client, audio_path)
+
+            if not transcript_text:
+                st.error("Transcription failed. Try another URL or check dependencies.")
+                st.stop()
+
+            # Optional: Google context enrichment
+            gkey = os.getenv("GOOGLE_API_KEY", "")
+            enriched_bits = []
+            if gkey:
+                query = f"{speaker} {ctx}".strip() or speaker or ctx or ""
+                if query:
+                    enriched_bits = _enrich_context_with_google(gkey, query)
+
+            if enriched_bits:
+                with st.expander("Context enrichment (Google)"):
+                    for item in enriched_bits:
+                        line = f"- {item.get('name') or ''}: {item.get('description') or ''}"
+                        if item.get("url"):
+                            line += f" — {item['url']}"
+                        st.markdown(line)
+
+            with st.spinner("Analyzing transcript for issues..."):
+                analysis = _analyze_transcript(client, transcript_text, speaker, ctx, fallacy)
+
+            st.subheader("Analysis Results")
+            st.markdown(analysis or "(No analysis returned)")
 
 
 if __name__ == "__main__":
