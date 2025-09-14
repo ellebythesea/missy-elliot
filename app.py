@@ -268,6 +268,107 @@ def _parse_analysis_findings(text: str) -> list[dict]:
     return [b for b in blocks if any(b.values())]
 
 
+def _generate_hashtags(findings: list[dict]) -> str:
+    """Generate 8–13 relevant hashtags based on findings content.
+
+    Uses simple keyword heuristics from the issue/good text.
+    """
+    import re
+
+    text = " \n".join(
+        [
+            (f.get("issue") or "") + " " + (f.get("good") or "")
+            for f in findings
+        ]
+    ).lower()
+
+    tags: list[str] = []
+
+    def add(*items: str) -> None:
+        for it in items:
+            if it not in tags:
+                tags.append(it)
+
+    # General baselines
+    add("#FactCheck", "#EvidenceBased", "#DataMatters", "#CriticalThinking")
+
+    # Keyword buckets
+    if any(k in text for k in ["lie", "false", "fake", "fabricat", "mislead", "exaggerat", "inflate"]):
+        add("#Misinformation", "#Disinformation", "#TruthMatters", "#Debunked")
+
+    if any(k in text for k in ["drug", "opioid", "fentanyl", "overdose", "addiction", "narcotic"]):
+        add("#DrugFacts", "#Overdose", "#HarmReduction", "#PublicHealth", "#Addiction")
+
+    if any(k in text for k in ["unodc", "united nations", "u.n.", "un "]):
+        add("#UNODC", "#GlobalHealth")
+
+    if any(k in text for k in ["statistic", "evidence", "data", "numbers", "source", "citation"]):
+        add("#EvidenceBased", "#DataIntegrity", "#MediaLiteracy", "#ContextMatters")
+
+    if any(k in text for k in ["health", "public health", "global"]):
+        add("#PublicHealth", "#GlobalHealth")
+
+    if any(k in text for k in ["fallacy", "strawman", "ad hominem", "whatabout", "false cause", "slippery"]):
+        add("#LogicalFallacy")
+
+    # Ensure 8–13 tags by padding with defaults and trimming if necessary
+    defaults = [
+        "#TruthMatters",
+        "#MediaLiteracy",
+        "#ContextMatters",
+        "#Accountability",
+        "#StayInformed",
+        "#CivicDialogue",
+        "#GlobalHealth",
+        "#PublicHealth",
+        "#HarmReduction",
+    ]
+    for d in defaults:
+        if len(tags) >= 13:
+            break
+        if d not in tags:
+            tags.append(d)
+
+    if len(tags) < 8:
+        # Final fallback to reach minimum count
+        extras = ["#EvidenceMatters", "#DataDriven", "#CheckTheFacts", "#StayEvidenceBased"]
+        for e in extras:
+            if len(tags) >= 8:
+                break
+            if e not in tags:
+                tags.append(e)
+
+    return " ".join(tags[:13])
+
+
+def _split_issue(issue: str) -> tuple[str, str]:
+    """Split an issue string into (name, description).
+
+    Heuristics handle common separators like em dash, hyphen, or colon.
+    """
+    s = (issue or "").strip()
+    if not s:
+        return "", ""
+    # Prefer em dash separators
+    for sep in [" — ", " —", "— ", "—"]:
+        if sep in s:
+            left, right = s.split(sep, 1)
+            return left.strip(), right.strip()
+    # Fallback to spaced hyphen
+    if " - " in s:
+        left, right = s.split(" - ", 1)
+        return left.strip(), right.strip()
+    # Fallback to colon
+    if ": " in s:
+        left, right = s.split(": ", 1)
+        return left.strip(), right.strip()
+    # Last resort: first word as name
+    parts = s.split(maxsplit=1)
+    if len(parts) == 2:
+        return parts[0].strip(), parts[1].strip()
+    return s, ""
+
+
 def _render_copy_button(label: str, text: str) -> None:
     """Render a simple HTML copy button using components (unique ID each time)."""
     btn_id = f"copybtn-{uuid.uuid4().hex}"
@@ -721,7 +822,11 @@ streamlit run app.py
                 analysis = _analyze_transcript(client, transcript_text, speaker, ctx, fallacy)
 
             st.subheader("Analysis Results")
-            # Format analysis into blocks with bolded quoted line and bullet points
+            # Format analysis into blocks per spec:
+            # 1) Bolded quote
+            # 2) Bolded fallacy name - explanation
+            # 3) Response (not bolded)
+            # 4) Horizontal rule between findings
             findings = _parse_analysis_findings(analysis)
             if findings:
                 formatted_sections = []
@@ -729,18 +834,23 @@ streamlit run app.py
                     quote = f.get("quote", "").strip()
                     issue = f.get("issue", "").strip()
                     good = f.get("good", "").strip()
-                    section = []
+                    section_lines = []
                     if quote:
-                        section.append(f"**\"{quote}\"**\n")
-                    bullets = []
+                        section_lines.append(f"**\"{quote}\"**")
                     if issue:
-                        bullets.append(f"- **Issue:** {issue}")
+                        name, desc = _split_issue(issue)
+                        if name and desc:
+                            section_lines.append(f"**{name}** - {desc}")
+                        else:
+                            # If we can't split, just bold the whole issue
+                            section_lines.append(f"**{issue}**")
                     if good:
-                        bullets.append(f"- **Good Response:** {good}")
-                    if bullets:
-                        section.append("\n" + "\n\n".join(bullets))
-                    formatted_sections.append("\n\n".join(section))
-                formatted_analysis = ("\n\n---\n\n".join(formatted_sections)).strip()
+                        section_lines.append(good)
+                    formatted_sections.append("\n\n".join(section_lines))
+
+                body = ("\n\n---\n\n".join(formatted_sections)).strip()
+                hashtags = _generate_hashtags(findings)
+                formatted_analysis = (body + ("\n\n" + hashtags if hashtags else "")).strip()
                 st.markdown(formatted_analysis)
                 _render_copy_button("Copy analysis", formatted_analysis)
             else:
