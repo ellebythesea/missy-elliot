@@ -28,11 +28,11 @@ A Streamlit app with two modes:
   - Inputs: Main topic/payoff, approximate length, optional style.
   - Output: 3‑second‑beat script with hooks, on‑screen text, and visuals.
 - Logical Fallacy
-  - Inputs: YouTube/Instagram URL, speaker name, optional context, fallacy focus.
+  - Inputs: Upload a short video/audio file (≤5 minutes), speaker name, optional context, fallacy focus.
   - Behavior:
-    - If YouTube with captions: uses `youtube-transcript-api`.
-    - Otherwise: downloads audio with `yt-dlp` and transcribes via OpenAI Whisper (`whisper-1`).
-    - Enforces ≤5 minutes duration (warns and stops if longer).
+    - Extracts a preview frame via `ffmpeg` to confirm the media is ready.
+    - Extracts audio (if video) and transcribes with OpenAI Whisper (`whisper-1`).
+    - Enforces ≤5 minutes duration via `ffprobe` (warns and stops if longer).
     - Optionally enriches context with SerpAPI (if `SERPAPI_API_KEY` is set).
   - Output format per finding:
     - Quote: [exact quote]
@@ -61,9 +61,9 @@ Monthly remember-me (cookie):
 - Missy Elliott mode
   - Enter a topic and generate a script; verify 3‑second beats are present.
 - Logical Fallacy mode
-  - Use a public YouTube video under 5 minutes, e.g. https://www.youtube.com/watch?v=G7KNmW9a75Y
-  - Try a public Instagram reel URL (must be publicly accessible).
-  - Verify duration check, transcription, and analysis output. If `SERPAPI_API_KEY` is set, check the “Context enrichment (Search)” section.
+  - Upload a short MP4/MOV/WebM or audio file (≤5 minutes).
+  - Verify you see a preview frame after upload (if video and ffmpeg is installed).
+  - Run analysis and confirm findings are formatted as specified. If `SERPAPI_API_KEY` is set, check the “Context enrichment (Search)” section.
 
 ## GitHub Actions Example
 Add your OpenAI API key as a repository secret:
