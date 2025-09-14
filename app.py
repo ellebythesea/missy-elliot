@@ -421,24 +421,39 @@ def main() -> None:
         if not is_unlocked:
             if _HAS_STX:
                 cm = stx.CookieManager()
-                _ = cm.get_all()  # initialize
+                _ = cm.get_all()  # initialize component
                 token = cm.get(cookie_name)
-                if not (token and _verify_token(token)):
-                    with st.form("password-form"):
-                        pwd = st.text_input("Enter app password", type="password").strip()
-                        submit_pwd = st.form_submit_button("Unlock")
-                    if submit_pwd:
-                        if hmac.compare_digest(pwd, app_password.strip()):
-                            exp_dt = dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=expiry_days)
-                            exp_ts = int(exp_dt.timestamp())
-                            # Set cookie and mark session as unlocked for immediate access
-                            cm.set(cookie_name, _make_token(exp_ts), expires_at=exp_dt)
-                            st.session_state["_auth_ok"] = True
-                            st.success("Unlocked")
-                            st.rerun()
-                        else:
-                            st.error("Incorrect password. Please try again.")
-                    st.stop()
+
+                # CookieManager may need one render to hydrate cookies. Pause once.
+                if token is None:
+                    if not st.session_state.get("_cookie_checked"):
+                        st.session_state["_cookie_checked"] = True
+                        st.stop()
+                    else:
+                        # If still None after hydration attempt, treat as absent.
+                        token = ""
+
+                # If we have a valid token, unlock without prompting.
+                if token and _verify_token(token):
+                    st.session_state["_auth_ok"] = True
+                    st.rerun()
+
+                # Otherwise, show the password form.
+                with st.form("password-form"):
+                    pwd = st.text_input("Enter app password", type="password").strip()
+                    submit_pwd = st.form_submit_button("Unlock")
+                if submit_pwd:
+                    if hmac.compare_digest(pwd, app_password.strip()):
+                        exp_dt = dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=expiry_days)
+                        exp_ts = int(exp_dt.timestamp())
+                        # Set cookie and mark session as unlocked for immediate access
+                        cm.set(cookie_name, _make_token(exp_ts), expires_at=exp_dt)
+                        st.session_state["_auth_ok"] = True
+                        st.success("Unlocked")
+                        st.rerun()
+                    else:
+                        st.error("Incorrect password. Please try again.")
+                st.stop()
             else:
                 # Fallback: simple in-session password (requires each new browser session)
                 if "_auth_ok" not in st.session_state:
