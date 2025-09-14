@@ -333,18 +333,7 @@ def main() -> None:
     st.set_page_config(page_title=APP_TITLE, page_icon="🎬", layout="centered")
     st.title(APP_TITLE)
     st.caption("Design in reverse. Analyze rhetoric. Ship better videos.")
-    with st.expander("What is the Missy Elliott method?"):
-        st.markdown(
-            """
-            The Missy Elliott method designs videos in reverse: instead of planning
-            the end payoff and hoping viewers reach it, you validate attention in
-            3‑second beats from the very start. Write the opening 0–3 seconds so
-            it's irresistible, then the next 3 seconds, and so on. For each beat,
-            ask: “Would I keep watching? Why should anyone care?” This mirrors the
-            viewer experience and forces tight hooks, clear payoffs, and steady
-            curiosity.
-            """
-        )
+    # Info expander moved below auth so it doesn't appear on the password page
 
     # Optional password gate with monthly remember-me cookie and NO username field.
     app_password = os.getenv("APP_PASSWORD", "")
@@ -442,6 +431,20 @@ def main() -> None:
             api_key = st.secrets.get("OPENAI_API_KEY", "")
         except Exception:
             pass
+
+    # Show info expander only after auth (or when no password is set)
+    with st.expander("What is the Missy Elliott method?"):
+        st.markdown(
+            """
+            The Missy Elliott method designs videos in reverse: instead of planning
+            the end payoff and hoping viewers reach it, you validate attention in
+            3‑second beats from the very start. Write the opening 0–3 seconds so
+            it's irresistible, then the next 3 seconds, and so on. For each beat,
+            ask: “Would I keep watching? Why should anyone care?” This mirrors the
+            viewer experience and forces tight hooks, clear payoffs, and steady
+            curiosity.
+            """
+        )
 
     # Mode switch
     st.selectbox(
