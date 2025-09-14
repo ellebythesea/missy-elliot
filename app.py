@@ -217,6 +217,90 @@ def _analyze_transcript(client, transcript: str, speaker: str, context: str, fal
         return f"Analysis failed: {e}"
 
 
+def _parse_analysis_findings(text: str) -> list[dict]:
+    """Parse LLM output with lines: Quote:, Issue:, Good Response: into structured blocks.
+
+    Returns a list of dicts with keys: quote, issue, good.
+    """
+    blocks: list[dict] = []
+    if not text:
+        return blocks
+    # Split on blank lines into candidate blocks
+    parts = [p.strip() for p in text.strip().split("\n\n") if p.strip()]
+    cur: dict | None = None
+    for part in parts:
+        # A part may contain multiple lines; handle each line
+        for line in part.splitlines():
+            l = line.strip()
+            low = l.lower()
+            if low.startswith("quote:"):
+                if cur and (cur.get("quote") or cur.get("issue") or cur.get("good")):
+                    blocks.append(cur)
+                cur = {"quote": l.split(":", 1)[1].strip(), "issue": "", "good": ""}
+            elif low.startswith("issue:"):
+                cur = cur or {"quote": "", "issue": "", "good": ""}
+                cur["issue"] = l.split(":", 1)[1].strip()
+            elif low.startswith("good response:"):
+                cur = cur or {"quote": "", "issue": "", "good": ""}
+                cur["good"] = l.split(":", 1)[1].strip()
+            else:
+                # Continuation lines: append to last non-empty field
+                if cur:
+                    if cur.get("good"):
+                        cur["good"] = (cur["good"] + " " + l).strip()
+                    elif cur.get("issue"):
+                        cur["issue"] = (cur["issue"] + " " + l).strip()
+                    elif cur.get("quote"):
+                        cur["quote"] = (cur["quote"] + " " + l).strip()
+        # End of part: close block if we have at least one field
+        if cur and (cur.get("quote") or cur.get("issue") or cur.get("good")):
+            blocks.append(cur)
+            cur = None
+    if cur and (cur.get("quote") or cur.get("issue") or cur.get("good")):
+        blocks.append(cur)
+    # Normalize quotes: strip surrounding quotes
+    for b in blocks:
+        q = (b.get("quote") or "").strip()
+        if q.startswith("[") and q.endswith("]"):
+            q = q[1:-1].strip()
+        q = q.strip('"')
+        b["quote"] = q
+    return [b for b in blocks if any(b.values())]
+
+
+def _render_copy_button(label: str, text: str) -> None:
+    """Render a simple HTML copy button using components (unique ID each time)."""
+    btn_id = f"copybtn-{uuid.uuid4().hex}"
+    safe_text = json.dumps(text or "")
+    safe_label = json.dumps(label)
+    components.html(
+        f"""
+        <div style='margin: 0.25rem 0 0.5rem 0;'>
+          <button id='{btn_id}' style='padding:6px 10px; border-radius:6px; border:1px solid #ccc; cursor:pointer;'>
+            {label}
+          </button>
+        </div>
+        <script>
+          const btn = document.getElementById('{btn_id}');
+          if (btn) {{
+            const original = {safe_label};
+            btn.addEventListener('click', async () => {{
+              try {{
+                await navigator.clipboard.writeText({safe_text});
+                btn.innerText = 'Copied!';
+                setTimeout(() => btn.innerText = original, 1200);
+              }} catch (e) {{
+                btn.innerText = 'Copy failed';
+                setTimeout(() => btn.innerText = original, 1500);
+              }}
+            }});
+          }}
+        </script>
+        """,
+        height=60,
+    )
+
+
 # ----------------------
 # Local media helpers (upload)
 # ----------------------
@@ -596,7 +680,52 @@ streamlit run app.py
                 analysis = _analyze_transcript(client, transcript_text, speaker, ctx, fallacy)
 
             st.subheader("Analysis Results")
-            st.markdown(analysis or "(No analysis returned)")
+            # Format analysis into blocks with bolded quoted line and bullet points
+            findings = _parse_analysis_findings(analysis)
+            if findings:
+                formatted_sections = []
+                for f in findings:
+                    quote = f.get("quote", "").strip()
+                    issue = f.get("issue", "").strip()
+                    good = f.get("good", "").strip()
+                    section = []
+                    if quote:
+                        section.append(f"**\"{quote}\"**\n")
+                    bullets = []
+                    if issue:
+                        bullets.append(f"- **Issue:** {issue}")
+                    if good:
+                        bullets.append(f"- **Good Response:** {good}")
+                    if bullets:
+                        section.append("\n" + "\n\n".join(bullets))
+                    formatted_sections.append("\n\n".join(section))
+                formatted_analysis = ("\n\n---\n\n".join(formatted_sections)).strip()
+                st.markdown(formatted_analysis)
+                _render_copy_button("Copy analysis", formatted_analysis)
+            else:
+                st.markdown(analysis or "(No analysis returned)")
+                if analysis:
+                    _render_copy_button("Copy analysis", analysis)
+
+            # Also generate a 30-second Missy Elliott style response video script
+            st.subheader("30s Response Script")
+            with st.spinner("Generating 30-second response script..."):
+                sys = MISSY_METHOD_PROMPT
+                resp_user_prompt = (
+                    "Generate a 30-second response video script that addresses the misleading or problematic "
+                    "statements identified below. Use tight 3-second beats exactly as in the Missy Elliott method "
+                    "(0-3s, 3-6s, ...). Keep tone factual, constructive, and audience-friendly. If useful, reference "
+                    "the speaker or context.\n\n"
+                    f"Speaker: {speaker or 'Unknown'}\n"
+                    f"Context: {ctx or 'None provided'}\n"
+                    "Findings to address (use as input; do not repeat labels):\n" + (analysis or "")
+                )
+                try:
+                    response_script = call_openai(client, sys, resp_user_prompt, model=DEFAULT_MODEL, temperature=TEMPERATURE)
+                except Exception as e:
+                    response_script = f"Script generation failed: {e}"
+            st.markdown(response_script or "(No content returned)")
+            _render_copy_button("Copy 30s response script", response_script or "")
 
 
 if __name__ == "__main__":
