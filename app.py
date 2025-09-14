@@ -329,6 +329,52 @@ def _analyze_transcript(client, transcript: str, speaker: str, context: str, fal
         return f"Analysis failed: {e}"
 
 
+# ----------------------
+# Local media helpers (upload)
+# ----------------------
+
+def _ffprobe_duration_seconds(path: Path) -> int | None:
+    """Use ffprobe to get media duration in seconds. Returns None if unavailable."""
+    try:
+        import subprocess, shlex
+        cmd = f"ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 {shlex.quote(str(path))}"
+        out = subprocess.check_output(cmd, shell=True, stderr=subprocess.STDOUT, text=True).strip()
+        if out:
+            return int(float(out))
+    except Exception:
+        return None
+    return None
+
+
+def _extract_frame_screenshot(video_path: Path, time_s: float = 0.5) -> Path | None:
+    """Extract a single frame as PNG from a media file using ffmpeg."""
+    try:
+        import subprocess, shlex
+        out_dir = Path(tempfile.mkdtemp(prefix="lf_frame_"))
+        out_path = out_dir / "frame.png"
+        cmd = (
+            f"ffmpeg -y -ss {time_s} -i {shlex.quote(str(video_path))} -frames:v 1 "
+            f"-q:v 2 {shlex.quote(str(out_path))}"
+        )
+        subprocess.check_call(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return out_path if out_path.exists() else None
+    except Exception:
+        return None
+
+
+def _extract_audio_from_media(media_path: Path) -> Path | None:
+    """Extract audio track to MP3 using ffmpeg. Returns path or None."""
+    try:
+        import subprocess, shlex
+        out_dir = Path(tempfile.mkdtemp(prefix="lf_audio_local_"))
+        out_path = out_dir / "audio.mp3"
+        cmd = f"ffmpeg -y -i {shlex.quote(str(media_path))} -vn -acodec libmp3lame -q:a 2 {shlex.quote(str(out_path))}"
+        subprocess.check_call(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return out_path if out_path.exists() else None
+    except Exception:
+        return None
+
+
 def main() -> None:
     st.set_page_config(page_title=APP_TITLE, page_icon="🎬", layout="centered")
     st.title(APP_TITLE)
@@ -557,7 +603,28 @@ streamlit run app.py
             st.caption("Pro tip: Iterate by tightening the first 3–6 seconds until it's irresistible.")
     else:
         with st.form(key="logical-fallacy-form", clear_on_submit=False):
-            url = st.text_input("YouTube or Instagram URL*", placeholder="https://www.youtube.com/watch?v=...")
+            uploaded = st.file_uploader(
+                "Upload video or audio (≤5 minutes)",
+                type=["mp4", "mov", "mkv", "webm", "m4v", "mp3", "wav", "m4a", "aac"],
+                accept_multiple_files=False,
+                help="Upload a short clip. We'll grab a frame to confirm it's ready.",
+            )
+
+            # Prepare temp file if uploaded to enable preview screenshot
+            temp_media_path: Path | None = None
+            if uploaded is not None:
+                tmp_dir = Path(tempfile.mkdtemp(prefix="lf_upload_"))
+                temp_media_path = tmp_dir / uploaded.name
+                with open(temp_media_path, "wb") as f:
+                    f.write(uploaded.getbuffer())
+
+                # Extract and show a screenshot if it's a video container
+                screenshot = _extract_frame_screenshot(temp_media_path)
+                if screenshot and screenshot.exists():
+                    st.image(str(screenshot), caption="Preview frame", use_column_width=True)
+                else:
+                    st.info("Preview frame unavailable (audio-only or ffmpeg not found).")
+
             speaker = st.text_input("Speaker's name", placeholder="e.g., John Doe")
             ctx = st.text_area(
                 "Context (optional)",
@@ -579,37 +646,46 @@ streamlit run app.py
             submitted = st.form_submit_button("Analyze Video")
 
         if submitted:
-            if not url or not _is_url(url):
-                st.error("Please enter a valid YouTube or Instagram URL.")
-                st.stop()
-
-            # Duration check (<= 5 minutes)
-            dur = _get_video_duration_seconds(url)
-            if dur is None:
-                st.info("Could not determine video duration; proceeding cautiously.")
-            elif dur > 300:
-                st.warning("Video is longer than 5 minutes. Please choose a shorter clip.")
+            if uploaded is None:
+                st.error("Please upload a short video or audio file.")
                 st.stop()
 
             if not api_key:
                 st.error("Missing OPENAI_API_KEY environment variable. Set it and rerun the app.")
                 st.stop()
 
+            # Ensure temp path exists (recompute if needed)
+            if temp_media_path is None:
+                tmp_dir = Path(tempfile.mkdtemp(prefix="lf_upload_"))
+                temp_media_path = tmp_dir / uploaded.name
+                with open(temp_media_path, "wb") as f:
+                    f.write(uploaded.getbuffer())
+
+            # Duration check (<= 5 minutes)
+            dur = _ffprobe_duration_seconds(temp_media_path)
+            if dur is None:
+                st.info("Could not determine media duration; proceeding cautiously.")
+            elif dur > 300:
+                st.warning("Media is longer than 5 minutes. Please choose a shorter clip.")
+                st.stop()
+
             client = get_openai_client(api_key)
 
-            transcript_text: str | None = None
             with st.spinner("Transcribing audio..."):
-                if _is_youtube(url):
-                    transcript_text = _try_youtube_transcript(url)
-                if not transcript_text:
-                    audio_path = _download_audio_with_ytdlp(url)
-                    if not audio_path or not audio_path.exists():
-                        st.error("Failed to download audio for transcription. Ensure the URL is public.")
-                        st.stop()
-                    transcript_text = _transcribe_via_whisper(client, audio_path)
+                # If audio-only extension, transcribe directly; else extract audio first
+                audio_exts = {".mp3", ".wav", ".m4a", ".aac"}
+                if temp_media_path.suffix.lower() in audio_exts:
+                    audio_path = temp_media_path
+                else:
+                    audio_path = _extract_audio_from_media(temp_media_path)
+                if not audio_path or not Path(audio_path).exists():
+                    st.error("Failed to extract audio for transcription. Ensure ffmpeg is installed.")
+                    st.stop()
+
+                transcript_text = _transcribe_via_whisper(client, audio_path)
 
             if not transcript_text:
-                st.error("Transcription failed. Try another URL or check dependencies.")
+                st.error("Transcription failed. Try another file or check dependencies.")
                 st.stop()
 
             # Optional: SerpAPI context enrichment
