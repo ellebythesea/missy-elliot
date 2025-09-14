@@ -593,7 +593,20 @@ streamlit run app.py
                 # Extract and show a screenshot if it's a video container
                 screenshot = _extract_frame_screenshot(temp_media_path)
                 if screenshot and screenshot.exists():
-                    st.image(str(screenshot), caption="Preview frame", use_column_width=True)
+                    try:
+                        with open(screenshot, "rb") as f:
+                            b64 = base64.b64encode(f.read()).decode()
+                        components.html(
+                            f"""
+                            <div style='display:flex; justify-content:center;'>
+                              <img src='data:image/png;base64,{b64}' alt='Preview frame' style='max-height:300px; width:auto; object-fit:contain; border-radius:6px; border:1px solid #eee;'>
+                            </div>
+                            """,
+                            height=320,
+                        )
+                        st.caption("Preview frame")
+                    except Exception:
+                        st.info("Preview frame unavailable (failed to render).")
                 else:
                     st.info("Preview frame unavailable (audio-only or ffmpeg not found).")
 
