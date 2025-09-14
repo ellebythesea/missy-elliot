@@ -129,9 +129,14 @@ Run with a local `.env` file:
 docker run --env-file .env -p 8501:8501 missy-elliott-app
 ```
 
+Note: If you plan to process or transcribe media in production, ensure `ffmpeg` is installed on the host. The provided Dockerfile installs `ffmpeg` so containers will have it available.
+
 ## Deployment
 - Any host that supports `streamlit run app.py` works (Streamlit Cloud, Fly.io, Railway, etc.).
 - Provide `OPENAI_API_KEY` (and optionally `OPENAI_MODEL`, `OPENAI_TEMPERATURE`) as environment variables in your hosting platform.
+
+### Streamlit Community Cloud note
+This repo includes a `packages.txt` that requests `ffmpeg`. When deploying on Streamlit Community Cloud, that file ensures the ffmpeg system package is installed before your app starts.
 
 ### Streamlit Cloud
 Two easy ways to provide your OpenAI key:
