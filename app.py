@@ -432,22 +432,10 @@ def main() -> None:
         except Exception:
             pass
 
-    # Show info expander only after auth (or when no password is set)
-    with st.expander("What is the Missy Elliott method?"):
-        st.markdown(
-            """
-            The Missy Elliott method designs videos in reverse: instead of planning
-            the end payoff and hoping viewers reach it, you validate attention in
-            3‑second beats from the very start. Write the opening 0–3 seconds so
-            it's irresistible, then the next 3 seconds, and so on. For each beat,
-            ask: “Would I keep watching? Why should anyone care?” This mirrors the
-            viewer experience and forces tight hooks, clear payoffs, and steady
-            curiosity.
-            """
-        )
+    # Removed standalone Missy Elliott explainer; brief descriptions are shown near the mode dropdown instead.
 
     # Mode switch
-    st.selectbox(
+    mode = st.selectbox(
         "Mode",
         options=[
             "Missy Elliott",
@@ -455,10 +443,16 @@ def main() -> None:
         ],
         index=0,
         key="_mode",
-        help="Choose 'Missy Elliott' to generate 3‑second‑beat scripts, or 'Logical Fallacy' to analyze a video transcript for rhetorical issues.",
+        help="Generate 3‑second‑beat scripts or analyze a video for logical fallacies.",
     )
+    # Show concise per‑mode explanation below the dropdown
+    mode_desc = {
+        "Missy Elliott": "Generate 3-second-beat video scripts in Missy Elliott's style.",
+        "Logical Fallacy": "Analyze a short video for logical fallacies, divisive rhetoric, or misleading claims.",
+    }
+    st.caption(mode_desc.get(mode, ""))
 
-    if st.session_state.get("_mode") == "Missy Elliott":
+    if mode == "Missy Elliott":
         with st.form(key="missy-form", clear_on_submit=False):
             topic = st.text_area(
                 "Payoff or main topic*",
@@ -562,7 +556,6 @@ streamlit run app.py
             st.divider()
             st.caption("Pro tip: Iterate by tightening the first 3–6 seconds until it's irresistible.")
     else:
-        st.caption("Analyze a video for logical fallacies, divisive rhetoric, and misleading claims.")
         with st.form(key="logical-fallacy-form", clear_on_submit=False):
             url = st.text_input("YouTube or Instagram URL*", placeholder="https://www.youtube.com/watch?v=...")
             speaker = st.text_input("Speaker's name", placeholder="e.g., John Doe")
