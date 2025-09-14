@@ -301,6 +301,32 @@ def _render_copy_button(label: str, text: str) -> None:
     )
 
 
+def _render_capped_image(img_source, max_height: int = 300, caption: str | None = None) -> None:
+    """Render an image capped to a max height using an HTML <img>.
+
+    img_source can be a filesystem path (str/Path) or raw bytes.
+    """
+    try:
+        if isinstance(img_source, (str, Path)):
+            with open(img_source, "rb") as f:
+                data = f.read()
+        else:  # assume bytes-like
+            data = img_source
+        b64 = base64.b64encode(data).decode()
+        components.html(
+            f"""
+            <div style='display:flex; justify-content:center;'>
+              <img src='data:image/png;base64,{b64}' alt='Preview image' style='max-height:{max_height}px; width:auto; object-fit:contain; border-radius:6px; border:1px solid #eee;'>
+            </div>
+            """,
+            height=max(60, max_height + 20),
+        )
+        if caption:
+            st.caption(caption)
+    except Exception:
+        st.info("Image preview unavailable (failed to render).")
+
+
 # ----------------------
 # Local media helpers (upload)
 # ----------------------
@@ -593,20 +619,7 @@ streamlit run app.py
                 # Extract and show a screenshot if it's a video container
                 screenshot = _extract_frame_screenshot(temp_media_path)
                 if screenshot and screenshot.exists():
-                    try:
-                        with open(screenshot, "rb") as f:
-                            b64 = base64.b64encode(f.read()).decode()
-                        components.html(
-                            f"""
-                            <div style='display:flex; justify-content:center;'>
-                              <img src='data:image/png;base64,{b64}' alt='Preview frame' style='max-height:300px; width:auto; object-fit:contain; border-radius:6px; border:1px solid #eee;'>
-                            </div>
-                            """,
-                            height=320,
-                        )
-                        st.caption("Preview frame")
-                    except Exception:
-                        st.info("Preview frame unavailable (failed to render).")
+                    _render_capped_image(screenshot, max_height=300, caption="Preview frame")
                 else:
                     st.info("Preview frame unavailable (audio-only or ffmpeg not found).")
 
