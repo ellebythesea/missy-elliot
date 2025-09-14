@@ -1,6 +1,8 @@
-# Missy Elliott Style Viral Video Script Generator
+# Viral Video Script Generator
 
-A minimal Streamlit app that generates timed, 3-second-beat video scripts using the Missy Elliott method.
+A Streamlit app with two modes:
+- Missy Elliott: generates timed, 3‑second‑beat scripts using the Missy Elliott method.
+- Logical Fallacy: analyzes a short YouTube/Instagram video transcript for logical fallacies, divisive rhetoric, and misleading claims.
 
 ## Quick Start
 - Python 3.9+
@@ -8,14 +10,34 @@ A minimal Streamlit app that generates timed, 3-second-beat video scripts using 
   - macOS/Linux: `python3 -m venv .venv && source .venv/bin/activate`
   - Windows (Powershell): `py -m venv .venv; .venv\\Scripts\\Activate.ps1`
 - Install deps: `pip install -r requirements.txt`
+- Install ffmpeg (required for audio extraction when transcripts are unavailable)
+  - macOS: `brew install ffmpeg`
+  - Ubuntu/Debian: `sudo apt-get update && sudo apt-get install -y ffmpeg`
 - Set env vars:
   - Copy `.env.example` to `.env`
   - Set `OPENAI_API_KEY` in `.env`
 - Run: `streamlit run app.py`
 
 ## Configuration
-- `OPENAI_MODEL` (default `gpt-4o`) and `OPENAI_TEMPERATURE` (default `0.8`) can be set via environment variables or `.env`.
+- `OPENAI_MODEL` (default `gpt-4o-mini`) and `OPENAI_TEMPERATURE` (default `0.8`) can be set via environment variables or `.env`.
+- Optional: `SERPAPI_API_KEY` enables search-based context enrichment in Logical Fallacy mode (free tier available at serpapi.com). If unset, the app skips enrichment gracefully.
 - See `config.py` and `prompts.py` for centralized settings and prompts.
+
+### Modes
+- Missy Elliott
+  - Inputs: Main topic/payoff, approximate length, optional style.
+  - Output: 3‑second‑beat script with hooks, on‑screen text, and visuals.
+- Logical Fallacy
+  - Inputs: YouTube/Instagram URL, speaker name, optional context, fallacy focus.
+  - Behavior:
+    - If YouTube with captions: uses `youtube-transcript-api`.
+    - Otherwise: downloads audio with `yt-dlp` and transcribes via OpenAI Whisper (`whisper-1`).
+    - Enforces ≤5 minutes duration (warns and stops if longer).
+    - Optionally enriches context with SerpAPI (if `SERPAPI_API_KEY` is set).
+  - Output format per finding:
+    - Quote: [exact quote]
+    - Issue: [logical fallacy/divisive rhetoric/lie — brief]
+    - Good Response: [concise, factual counter]
 
 ### Optional password gate
 Set `APP_PASSWORD` (via `.env`, host env, or Streamlit Cloud Secrets) to require a password before the app UI loads. If `APP_PASSWORD` is unset, the app is open.
@@ -34,6 +56,14 @@ Monthly remember-me (cookie):
 - `prompts.py`: Exact system prompt and user prompt builder
 - `.env.example`: Copy to `.env` and fill in secrets
 - `.gitignore`: Prevents committing `.env` and local artifacts
+
+## Testing
+- Missy Elliott mode
+  - Enter a topic and generate a script; verify 3‑second beats are present.
+- Logical Fallacy mode
+  - Use a public YouTube video under 5 minutes, e.g. https://www.youtube.com/watch?v=G7KNmW9a75Y
+  - Try a public Instagram reel URL (must be publicly accessible).
+  - Verify duration check, transcription, and analysis output. If `SERPAPI_API_KEY` is set, check the “Context enrichment (Search)” section.
 
 ## GitHub Actions Example
 Add your OpenAI API key as a repository secret:
@@ -108,6 +138,7 @@ Two easy ways to provide your OpenAI key:
 - Environment variables: In your app’s Settings → Advanced → Environment variables, add `OPENAI_API_KEY`.
 - Secrets: In app Settings → Secrets, add `OPENAI_API_KEY = "sk-..."`. The app will read `st.secrets["OPENAI_API_KEY"]` if the env var is not set.
   - You can also add `APP_PASSWORD = "your-password"` to require a password.
+  - Optional: add `SERPAPI_API_KEY = "..."` to enable context enrichment in Logical Fallacy mode.
 
 Local example for secrets: copy `.streamlit/secrets.toml.example` to `.streamlit/secrets.toml` and set your key.
 
