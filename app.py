@@ -23,8 +23,7 @@ import time
 import datetime as dt
 import tempfile
 from pathlib import Path
-import re
-from urllib.parse import urlparse, parse_qs
+# (no URL parsing needed for upload flow)
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -118,120 +117,9 @@ def call_openai(
 # Logical Fallacy helpers
 # ----------------------
 
-YOUTUBE_HOSTS = {"www.youtube.com", "youtube.com", "m.youtube.com", "youtu.be"}
-INSTAGRAM_HOSTS = {"www.instagram.com", "instagram.com", "m.instagram.com"}
+# URL helpers no longer needed after switching to file uploads for analysis
 
 
-def _is_url(url: str) -> bool:
-    try:
-        p = urlparse(url)
-        return p.scheme in {"http", "https"} and bool(p.netloc)
-    except Exception:
-        return False
-
-
-def _is_youtube(url: str) -> bool:
-    try:
-        return urlparse(url).netloc.replace(" ", "").lower() in YOUTUBE_HOSTS
-    except Exception:
-        return False
-
-
-def _extract_youtube_id(url: str) -> str | None:
-    try:
-        p = urlparse(url)
-        host = p.netloc.lower()
-        if host == "youtu.be":
-            vid = p.path.lstrip("/")
-            return vid or None
-        if "watch" in p.path:
-            q = parse_qs(p.query)
-            vid = q.get("v", [None])[0]
-            return vid
-        # Shorts or other formats
-        m = re.search(r"/(shorts|embed)/([\w-]{6,})", p.path)
-        if m:
-            return m.group(2)
-    except Exception:
-        pass
-    return None
-
-
-def _get_video_duration_seconds(url: str) -> int | None:
-    """Use yt-dlp to fetch metadata and return duration in seconds (or None)."""
-    try:
-        import yt_dlp  # type: ignore
-
-        ydl_opts = {
-            "quiet": True,
-            "no_warnings": True,
-            "skip_download": True,
-            "ignoreerrors": True,
-        }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            if not info:
-                return None
-            # Some extractors nest info in 'entries'
-            if "entries" in info and info["entries"]:
-                info = info["entries"][0]
-            return int(info.get("duration")) if info.get("duration") else None
-    except ImportError:
-        st.warning("Package 'yt-dlp' is not installed. Install it to enable duration checks.")
-    except Exception:
-        return None
-    return None
-
-
-def _try_youtube_transcript(url: str) -> str | None:
-    """Try using youtube-transcript-api. Returns transcript text or None."""
-    vid = _extract_youtube_id(url)
-    if not vid:
-        return None
-    try:
-        from youtube_transcript_api import YouTubeTranscriptApi  # type: ignore
-
-        # Prefer English; allow auto-generated
-        segments = YouTubeTranscriptApi.get_transcript(vid, languages=["en", "en-US"])
-        text = " ".join([s.get("text", "").strip() for s in segments if s.get("text")])
-        return re.sub(r"\s+", " ", text).strip()
-    except Exception:
-        return None
-
-
-def _download_audio_with_ytdlp(url: str) -> Path | None:
-    """Download audio to a temp file using yt-dlp and return the path."""
-    try:
-        import yt_dlp  # type: ignore
-
-        tempdir = Path(tempfile.mkdtemp(prefix="lf_audio_"))
-        outtmpl = str(tempdir / "%(id)s.%(ext)s")
-        ydl_opts = {
-            "format": "bestaudio/best",
-            "outtmpl": outtmpl,
-            "postprocessors": [
-                {
-                    "key": "FFmpegExtractAudio",
-                    "preferredcodec": "mp3",
-                    "preferredquality": "192",
-                }
-            ],
-            "quiet": True,
-            "no_warnings": True,
-        }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            if not info:
-                return None
-            # After postprocess, resulting file extension is mp3
-            base = info.get("id") or "audio"
-            audio_path = next((p for p in tempdir.glob(f"{base}.*") if p.suffix.lower() in {".mp3", ".m4a", ".aac", ".wav"}), None)
-            return audio_path
-    except ImportError:
-        st.warning("Package 'yt-dlp' is not installed. Install it to enable audio download.")
-    except Exception:
-        return None
-    return None
 
 
 def _transcribe_via_whisper(client, audio_path: Path) -> str | None:
