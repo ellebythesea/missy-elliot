@@ -601,7 +601,7 @@ def main() -> None:
             "Missy Elliott",
             "Logical Fallacy",
         ],
-        index=0,
+        index=1,
         key="_mode",
         help="Generate 3‑second‑beat scripts or analyze a video for logical fallacies.",
     )

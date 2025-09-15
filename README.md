@@ -24,6 +24,7 @@ A Streamlit app with two modes:
 - See `config.py` and `prompts.py` for centralized settings and prompts.
 
 ### Modes
+Default mode on load: Logical Fallacy.
 - Missy Elliott
   - Inputs: Main topic/payoff, approximate length, optional style.
   - Output: 3‑second‑beat script with hooks, on‑screen text, and visuals.
