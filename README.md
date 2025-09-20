@@ -1,7 +1,8 @@
 # Viral Video Script Generator
 
-A Streamlit app with two modes:
+A Streamlit app with three modes:
 - Missy Elliott: generates timed, 3‑second‑beat scripts using the Missy Elliott method.
+- Rebuttal Generator: turns opponent clips into rebuttal scripts with auto transcription, tone tabs, and CTA tooling.
 - Logical Fallacy: analyzes a short YouTube/Instagram video transcript for logical fallacies, divisive rhetoric, and misleading claims.
 
 ## Quick Start
@@ -27,7 +28,13 @@ A Streamlit app with two modes:
 Default mode on load: Logical Fallacy.
 - Missy Elliott
   - Inputs: Main topic/payoff, approximate length, optional style.
-  - Output: 3‑second‑beat script with hooks, on‑screen text, and visuals.
+  - Output: 3‑second‑beat script with hooks, on-screen text, and visuals.
+- Rebuttal Generator
+  - Upload an opponent video or audio clip (≤5 minutes), click **Transcribe**, and edit the transcript down to the bite you want to rebut.
+  - Instantly preview five tone-specific rebuttals in tabs (`Witty`, `Sarcastic`, `Empowered`, `Logical`, `Fallacy`). Hit **Add** on the one you like to drop it into the editable “Your Rebuttal” box.
+  - Layer in campaign touches: tweak the rebuttal, add a personal connection story, polish the final CTA, and set the closing on-screen message.
+  - Generate a 3-second-beat script (opponent quote first, then your response) ready to record, complete with timestamps for each line.
+  - Sidebar still includes password/logout controls plus a “Clear session state” button to reset the workflow.
 - Logical Fallacy
   - Inputs: Upload a short video/audio file (≤5 minutes), speaker name, optional context, fallacy focus.
   - Behavior:
@@ -60,7 +67,9 @@ Monthly remember-me (cookie):
 
 ## Testing
 - Missy Elliott mode
-  - Enter a topic and generate a script; verify 3‑second beats are present.
+  - Enter a topic and generate a script; verify 3-second beats are present.
+- Rebuttal Generator mode
+  - Upload an opponent clip, transcribe, review the five tone tabs, add one to “Your Rebuttal”, and generate the timed script.
 - Logical Fallacy mode
   - Upload a short MP4/MOV/WebM or audio file (≤5 minutes).
   - Verify you see a preview frame after upload (if video and ffmpeg is installed).

@@ -50,7 +50,14 @@ except Exception:  # pragma: no cover - only hit on older SDKs
 
 # Local configuration and prompts
 from config import MODEL as DEFAULT_MODEL, TEMPERATURE
-from prompts import MISSY_METHOD_PROMPT, build_user_prompt
+from prompts import (
+    MISSY_METHOD_PROMPT,
+    REBUTTAL_SYSTEM_PROMPT,
+    REBUTTAL_TONES,
+    build_rebuttal_variants_prompt,
+    build_user_prompt,
+    build_vote_script_prompt,
+)
 
 # Optional cookie manager for password remember-me without username field
 try:
@@ -268,6 +275,58 @@ def _parse_analysis_findings(text: str) -> list[dict]:
     return [b for b in blocks if any(b.values())]
 
 
+def _safe_json_loads(raw: str) -> dict[str, str]:
+    """Attempt to parse a JSON object from model output."""
+
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            # Ensure all values are strings
+            return {str(k): str(v) for k, v in data.items() if isinstance(v, (str, int, float))}
+    except json.JSONDecodeError:
+        pass
+
+    # Fallback: try to extract JSON substring
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        try:
+            data = json.loads(raw[start : end + 1])
+            if isinstance(data, dict):
+                return {str(k): str(v) for k, v in data.items() if isinstance(v, (str, int, float))}
+        except json.JSONDecodeError:
+            pass
+    return {}
+
+
+def _generate_rebuttal_variants(client, transcript: str) -> dict[str, str]:
+    """Generate rebuttal variants for each tone using the configured prompt."""
+
+    if not transcript:
+        return {}
+
+    trimmed = transcript.strip()
+    max_chars = 8000
+    if len(trimmed) > max_chars:
+        trimmed = trimmed[:max_chars] + "..."
+
+    prompt = build_rebuttal_variants_prompt(trimmed)
+    response = call_openai(
+        client,
+        REBUTTAL_SYSTEM_PROMPT,
+        prompt,
+        model=DEFAULT_MODEL,
+        temperature=0.6,
+    )
+    parsed = _safe_json_loads(response)
+    ordered: dict[str, str] = {}
+    for tone in REBUTTAL_TONES:
+        val = parsed.get(tone)
+        if val:
+            ordered[tone] = val.strip()
+    return ordered
+
+
 def _generate_hashtags(findings: list[dict]) -> str:
     """Generate 8–13 relevant hashtags based on findings content.
 
@@ -428,6 +487,14 @@ def _render_capped_image(img_source, max_height: int = 300, caption: str | None 
         st.info("Image preview unavailable (failed to render).")
 
 
+# Helper to render bordered containers while staying compatible with older Streamlit versions.
+def _bordered_container():
+    try:
+        return st.container(border=True)
+    except TypeError:  # pragma: no cover - older Streamlit fallback
+        return st.container()
+
+
 # ----------------------
 # Local media helpers (upload)
 # ----------------------
@@ -476,8 +543,6 @@ def _extract_audio_from_media(media_path: Path) -> Path | None:
 
 def main() -> None:
     st.set_page_config(page_title=APP_TITLE, page_icon="🎬", layout="centered")
-    st.title(APP_TITLE)
-    st.caption("Design in reverse. Analyze rhetoric. Ship better videos.")
     # Info expander moved below auth so it doesn't appear on the password page
 
     # Optional password gate with monthly remember-me cookie and NO username field.
@@ -592,22 +657,43 @@ def main() -> None:
         except Exception:
             pass
 
+    # Initialize session defaults for the rebuttal workflow
+    defaults = {
+        "voi_transcript": "",
+        "voi_rebuttals": {},
+        "voi_rebuttal_text": "",
+        "voi_personal_story": "",
+        "voi_final_cta": "Here’s how you make a difference: Share this clip, bring a friend, and vote early starting October 10.",
+        "voi_onscreen_message": "Make sure people remember what to do next: Early voting opens in October. Election Day is Nov 3, 2026.",
+        "voi_final_script": "",
+        "voi_last_added_tone": None,
+        "voi_transcript_loaded": False,
+        "voi_speaker": "",
+    }
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
+
+    if "_mode" not in st.session_state:
+        st.session_state["_mode"] = "Rebuttal Generator"
+
+    st.title(APP_TITLE)
+    st.caption("Design in reverse. Analyze rhetoric. Ship better videos.")
+
     # Removed standalone Missy Elliott explainer; brief descriptions are shown near the mode dropdown instead.
 
     # Mode switch
+    mode_options = ["Missy Elliott", "Rebuttal Generator", "Logical Fallacy"]
     mode = st.selectbox(
         "Mode",
-        options=[
-            "Missy Elliott",
-            "Logical Fallacy",
-        ],
-        index=1,
+        options=mode_options,
         key="_mode",
         help="Generate 3‑second‑beat scripts or analyze a video for logical fallacies.",
     )
     # Show concise per‑mode explanation below the dropdown
     mode_desc = {
         "Missy Elliott": "Generate 3-second-beat video scripts in Missy Elliott's style.",
+        "Rebuttal Generator": "Turn opponent clips into rebuttal scripts with selectable tones.",
         "Logical Fallacy": "Analyze a short video for logical fallacies, divisive rhetoric, or misleading claims.",
     }
     st.caption(mode_desc.get(mode, ""))
@@ -715,6 +801,215 @@ streamlit run app.py
 
             st.divider()
             st.caption("Pro tip: Iterate by tightening the first 3–6 seconds until it's irresistible.")
+    elif mode == "Rebuttal Generator":
+
+        if not api_key:
+            st.warning("Set OPENAI_API_KEY to enable transcription and generation.", icon="⚠️")
+
+        if st.sidebar.button("Clear session state"):
+            for to_clear in (
+                "voi_transcript",
+                "voi_transcript_loaded",
+                "voi_rebuttals",
+                "voi_rebuttal_text",
+                "voi_personal_story",
+                "voi_final_cta",
+                "voi_onscreen_message",
+                "voi_final_script",
+                "voi_last_added_tone",
+            ):
+                st.session_state.pop(to_clear, None)
+            st.rerun()
+
+        with _bordered_container():
+            uploaded_clip = st.file_uploader(
+                "Upload video or audio (≤5 minutes)",
+                type=["mp4", "mov", "mkv", "webm", "m4v", "mp3", "wav", "m4a", "aac"],
+                accept_multiple_files=False,
+                help="Bring in the opponent clip you want to rebut.",
+                key="voi_clip_upload",
+            )
+
+            transcribe_disabled = uploaded_clip is None or not api_key
+            if st.button("Transcribe", disabled=transcribe_disabled, type="primary", key="voi_transcribe_btn"):
+                if uploaded_clip is None:
+                    st.error("Please upload a clip before transcribing.")
+                elif not api_key:
+                    st.error("Missing OPENAI_API_KEY environment variable. Set it and rerun the app.")
+                else:
+                    client = get_openai_client(api_key)
+                    tmp_dir = Path(tempfile.mkdtemp(prefix="voi_upload_"))
+                    media_path = tmp_dir / uploaded_clip.name
+                    with open(media_path, "wb") as f:
+                        f.write(uploaded_clip.getbuffer())
+
+                    duration = _ffprobe_duration_seconds(media_path)
+                    if duration and duration > 300:
+                        st.warning("Media is longer than 5 minutes. Please choose a shorter clip.")
+                        st.stop()
+
+                    audio_exts = {".mp3", ".wav", ".m4a", ".aac"}
+                    if media_path.suffix.lower() in audio_exts:
+                        audio_path = media_path
+                    else:
+                        audio_path = _extract_audio_from_media(media_path)
+
+                    if not audio_path or not Path(audio_path).exists():
+                        st.error("Failed to extract audio for transcription. Ensure ffmpeg is installed.")
+                        st.stop()
+
+                    with st.spinner("Transcribing clip..."):
+                        transcript_text = _transcribe_via_whisper(client, audio_path)
+
+                    if not transcript_text:
+                        st.error("Transcription failed. Try another file or check dependencies.")
+                    else:
+                        st.session_state.voi_transcript = transcript_text.strip()
+                        st.session_state.voi_transcript_loaded = True
+                        st.session_state.voi_final_script = ""
+                        with st.spinner("Generating rebuttals..."):
+                            rebuttals = _generate_rebuttal_variants(client, st.session_state.voi_transcript)
+                        st.session_state.voi_rebuttals = rebuttals
+                        st.session_state.voi_rebuttal_text = ""
+                        st.session_state.voi_last_added_tone = None
+
+        transcript_ready = bool(st.session_state.get("voi_transcript_loaded", False))
+
+        if transcript_ready:
+            with st.container():
+                st.subheader("Transcript")
+                st.caption("Edit the transcript to keep only the portion you want to rebut.")
+                st.text_input(
+                    "Who is speaking in the clip?",
+                    key="voi_speaker",
+                    placeholder="Name and title (optional)",
+                    help="Helps position the opening quote in the final script.",
+                )
+                st.text_area(
+                    "Clip transcript",
+                    key="voi_transcript",
+                    height=220,
+                )
+
+                regenerate_disabled = not st.session_state.voi_transcript.strip() or not api_key
+                if st.button("Generate rebuttals", key="voi_generate_rebuttals_btn", disabled=regenerate_disabled):
+                    client = get_openai_client(api_key)
+                    with st.spinner("Generating rebuttals..."):
+                        rebuttals = _generate_rebuttal_variants(client, st.session_state.voi_transcript)
+                    st.session_state.voi_rebuttals = rebuttals
+                    st.session_state.voi_final_script = ""
+                    st.session_state.voi_rebuttal_text = ""
+
+        if transcript_ready:
+            st.subheader("Generated Rebuttals")
+            tabs = st.tabs(list(REBUTTAL_TONES.keys()))
+            for tone, tab in zip(REBUTTAL_TONES.keys(), tabs):
+                with tab:
+                    text = st.session_state.voi_rebuttals.get(tone, "")
+                    if text:
+                        st.markdown(text)
+                        if st.button("Add", key=f"voi_add_{tone}"):
+                            st.session_state.voi_rebuttal_text = text
+                            st.session_state.voi_last_added_tone = tone
+                    else:
+                        st.info("No rebuttal generated yet for this tone. Click Generate rebuttals to refresh.")
+
+            st.subheader("Your Rebuttal")
+            if st.session_state.voi_last_added_tone:
+                st.caption(f"Currently editing the {st.session_state.voi_last_added_tone.lower()} tone copy.")
+
+            st.text_area(
+                "Your rebuttal",
+                key="voi_rebuttal_text",
+                height=150,
+                placeholder="Add your rebuttal here.",
+            )
+            st.text_area(
+                "Personal Connection Story",
+                key="voi_personal_story",
+                height=120,
+                help="Add a personal story that makes the message hit harder.",
+                placeholder="Add story here.",
+            )
+            st.text_area(
+                "Final Call to Action",
+                key="voi_final_cta",
+                height=110,
+                help="Use or revise the example that starts with ‘Here’s how you make a difference:’.",
+                placeholder="Here’s how you make a difference:",
+            )
+            st.text_area(
+                "Final On-Screen Message",
+                key="voi_onscreen_message",
+                height=110,
+                help="Make sure people remember what to do next.",
+                placeholder="Make sure people remember what to do next.",
+            )
+
+            if st.button("Generate Script", type="primary", key="voi_generate_script_btn"):
+                if not api_key:
+                    st.error("Missing OPENAI_API_KEY environment variable. Set it and rerun the app.")
+                elif not st.session_state.voi_rebuttal_text.strip():
+                    st.error("Add a rebuttal before generating the script.")
+                else:
+                    client = get_openai_client(api_key)
+                    prompt = build_vote_script_prompt(
+                        st.session_state.voi_transcript.strip(),
+                        st.session_state.voi_speaker.strip(),
+                        st.session_state.voi_rebuttal_text.strip(),
+                        st.session_state.voi_personal_story.strip(),
+                        st.session_state.voi_final_cta.strip(),
+                        st.session_state.voi_onscreen_message.strip(),
+                    )
+                    with st.spinner("Building final script..."):
+                        try:
+                            script = call_openai(
+                                client,
+                                MISSY_METHOD_PROMPT,
+                                prompt,
+                                model=DEFAULT_MODEL,
+                                temperature=TEMPERATURE,
+                            )
+                        except Exception as exc:
+                            st.error(f"Script generation failed: {exc}")
+                        else:
+                            st.session_state.voi_final_script = script or ""
+
+        if st.session_state.voi_final_script:
+            st.subheader("Final Video Script")
+
+            def _render_copy_button(label: str, text: str) -> None:
+                btn_id = f"copybtn-{uuid.uuid4().hex}"
+                safe_text = json.dumps(text or "")
+                components.html(
+                    f"""
+                    <div style='margin: 0.25rem 0 0.75rem 0;'>
+                      <button id='{btn_id}' style='padding:6px 11px; border-radius:6px; border:1px solid #ccc; cursor:pointer;'>
+                        {label}
+                      </button>
+                    </div>
+                    <script>
+                      const btn = document.getElementById('{btn_id}');
+                      if (btn) {{
+                        btn.addEventListener('click', async () => {{
+                          const original = btn.innerText;
+                          try {{
+                            await navigator.clipboard.writeText({safe_text});
+                            btn.innerText = 'Copied!';
+                            setTimeout(() => btn.innerText = original, 1200);
+                          }} catch (e) {{
+                            btn.innerText = 'Copy failed';
+                            setTimeout(() => btn.innerText = original, 1500);
+                          }}
+                        }});
+                      }}
+                    </script>
+                    """,
+                    height=70,
+                )
+
+            _render_copy_button("Copy final script", st.session_state.voi_final_script)
+            st.markdown(st.session_state.voi_final_script or "(No content returned)")
     else:
         with st.form(key="logical-fallacy-form", clear_on_submit=False):
             uploaded = st.file_uploader(
