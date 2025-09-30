@@ -61,6 +61,7 @@ except Exception:
 
 
 APP_TITLE = "Viral Video Script Generator"
+MISSY_VIDEO_LENGTH_SECONDS = 30
 
 
 def get_openai_client(api_key: str):
@@ -601,7 +602,7 @@ def main() -> None:
             "Missy Elliott",
             "Logical Fallacy",
         ],
-        index=1,
+        index=0,
         key="_mode",
         help="Generate 3‑second‑beat scripts or analyze a video for logical fallacies.",
     )
@@ -616,18 +617,23 @@ def main() -> None:
         with st.form(key="missy-form", clear_on_submit=False):
             topic = st.text_area(
                 "Payoff or main topic*",
-                placeholder="Describe the payoff or main topic \nE.g., This is why you need to vote for Proposition 50 on Nov 4th, 2025.",
-                help="The core payoff or idea the video leads to. You can write a short paragraph.",
+                placeholder=(
+                    "Describe the payoff or main topic. Add any must-use stats or citations on new lines.\n"
+                    "E.g., This is why you need to vote for Proposition 50 on Nov 4th, 2025.\n"
+                    "76% of local renters spend half their income on housing (Source: City Housing Report)."
+                ),
+                help=(
+                    "The core payoff or idea the video leads to. Include any hard facts or figures here—"
+                    "numbers entered in this field will be quoted exactly once in the script."
+                ),
                 height=120,
             ).strip()
 
-            length_s = st.number_input(
-                "Approximate length (seconds)",
-                min_value=6,
-                max_value=600,
-                value=30,
-                step=3,
-                help="Used to size the number of 3-second beats.",
+            cta_input = st.text_area(
+                "Call to action for the Final CTA beat (optional)",
+                placeholder="Call your senator about SB-123 by Friday and share the petition with three friends.",
+                help="Supply a concrete, time-bound CTA. It will be paraphrased into the final beat if provided.",
+                height=60,
             )
 
             style = st.selectbox(
@@ -663,7 +669,12 @@ streamlit run app.py
                 try:
                     client = get_openai_client(api_key)
                     system_prompt = MISSY_METHOD_PROMPT
-                    user_prompt = build_user_prompt(topic, style, int(length_s))
+                    user_prompt = build_user_prompt(
+                        topic,
+                        style,
+                        MISSY_VIDEO_LENGTH_SECONDS,
+                        cta_input.strip(),
+                    )
                     script = call_openai(
                         client,
                         system_prompt,
