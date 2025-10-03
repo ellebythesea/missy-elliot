@@ -16,11 +16,7 @@ Environment variable required:
 from __future__ import annotations
 
 import os
-import hmac
-import hashlib
 import base64
-import time
-import datetime as dt
 import tempfile
 from pathlib import Path
 # (no URL parsing needed for upload flow)
@@ -51,14 +47,6 @@ except Exception:  # pragma: no cover - only hit on older SDKs
 # Local configuration and prompts
 from config import MODEL as DEFAULT_MODEL, TEMPERATURE
 from prompts import MISSY_METHOD_PROMPT, build_user_prompt
-
-# Optional cookie manager for password remember-me without username field
-try:
-    import extra_streamlit_components as stx  # type: ignore
-    _HAS_STX = True
-except Exception:
-    _HAS_STX = False
-
 
 APP_TITLE = "Viral Video Script Generator"
 MISSY_VIDEO_LENGTH_SECONDS = 30
@@ -477,112 +465,35 @@ def _extract_audio_from_media(media_path: Path) -> Path | None:
 
 def main() -> None:
     st.set_page_config(page_title=APP_TITLE, page_icon="🎬", layout="centered")
-    st.title(APP_TITLE)
-    st.caption("Design in reverse. Analyze rhetoric. Ship better videos.")
     # Info expander moved below auth so it doesn't appear on the password page
 
-    # Optional password gate with monthly remember-me cookie and NO username field.
-    app_password = os.getenv("APP_PASSWORD", "")
+    app_password = os.getenv("APP_PASSWORD", "").strip()
     if not app_password:
         try:
-            app_password = st.secrets.get("APP_PASSWORD", "")
+            app_password = st.secrets.get("APP_PASSWORD", "").strip()
         except Exception:
-            pass
-
-    # Cookie settings for remember-me auth
-    cookie_name = os.getenv("APP_AUTH_COOKIE_NAME", "missy_auth")
-    signature_key = os.getenv("APP_AUTH_SIGNATURE_KEY", "change-me")
-    try:
-        expiry_days = int(os.getenv("APP_AUTH_EXPIRY_DAYS", "30"))
-    except ValueError:
-        expiry_days = 30
+            app_password = ""
 
     if app_password:
-        is_unlocked = bool(st.session_state.get("_auth_ok"))
+        if "authenticated" not in st.session_state:
+            st.session_state["authenticated"] = False
 
-        def _make_token(expiry_ts: int) -> str:
-            msg = str(expiry_ts).encode()
-            sig = hmac.new(signature_key.encode(), msg, hashlib.sha256).digest()
-            sig_b64 = base64.urlsafe_b64encode(sig).decode().rstrip("=")
-            return f"{expiry_ts}.{sig_b64}"
-
-        def _verify_token(token: str) -> bool:
-            try:
-                expiry_s, sig = token.split(".", 1)
-                expiry_ts = int(expiry_s)
-                if time.time() > expiry_ts:
-                    return False
-                msg = expiry_s.encode()
-                expected = base64.urlsafe_b64encode(
-                    hmac.new(signature_key.encode(), msg, hashlib.sha256).digest()
-                ).decode().rstrip("=")
-                return hmac.compare_digest(sig, expected)
-            except Exception:
-                return False
-
-        if not is_unlocked:
-            if _HAS_STX:
-                cm = stx.CookieManager()
-                _ = cm.get_all()  # initialize component
-                token = cm.get(cookie_name)
-
-                # CookieManager may need one render to hydrate cookies. Pause once.
-                if token is None:
-                    if not st.session_state.get("_cookie_checked"):
-                        st.session_state["_cookie_checked"] = True
-                        st.stop()
-                    else:
-                        # If still None after hydration attempt, treat as absent.
-                        token = ""
-
-                # If we have a valid token, unlock without prompting.
-                if token and _verify_token(token):
-                    st.session_state["_auth_ok"] = True
+        if not st.session_state["authenticated"]:
+            password = st.text_input("Enter password to access the app", type="password")
+            if st.button("Login"):
+                if password == app_password:
+                    st.session_state["authenticated"] = True
                     st.rerun()
-
-                # Otherwise, show the password form.
-                with st.form("password-form"):
-                    pwd = st.text_input("Enter app password", type="password").strip()
-                    submit_pwd = st.form_submit_button("Unlock")
-                if submit_pwd:
-                    if hmac.compare_digest(pwd, app_password.strip()):
-                        exp_dt = dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=expiry_days)
-                        exp_ts = int(exp_dt.timestamp())
-                        # Set cookie and mark session as unlocked for immediate access
-                        cm.set(cookie_name, _make_token(exp_ts), expires_at=exp_dt)
-                        st.session_state["_auth_ok"] = True
-                        st.success("Unlocked")
-                        st.rerun()
-                    else:
-                        st.error("Incorrect password. Please try again.")
-                st.stop()
-            else:
-                # Fallback: simple in-session password (requires each new browser session)
-                if "_auth_ok" not in st.session_state:
-                    st.session_state["_auth_ok"] = False
-                if not st.session_state["_auth_ok"]:
-                    with st.form("password-form"):
-                        pwd = st.text_input("Enter app password", type="password").strip()
-                        submit_pwd = st.form_submit_button("Unlock")
-                    if submit_pwd:
-                        if hmac.compare_digest(pwd, app_password.strip()):
-                            st.session_state["_auth_ok"] = True
-                            st.success("Unlocked")
-                            st.rerun()
-                        else:
-                            st.error("Incorrect password. Please try again.")
-                    st.stop()
+                else:
+                    st.error("Incorrect password")
+            st.stop()
         else:
-            # Already unlocked: offer logout if cookies are enabled
-            if _HAS_STX:
-                cm = stx.CookieManager()
-                if st.sidebar.button("Logout"):
-                    try:
-                        cm.delete(cookie_name)
-                    except Exception:
-                        cm.set(cookie_name, "", expires_at=dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=1))
-                    st.session_state.pop("_auth_ok", None)
-                    st.rerun()
+            if st.sidebar.button("Logout"):
+                st.session_state["authenticated"] = False
+                st.rerun()
+
+    st.title(APP_TITLE)
+    st.caption("Design in reverse. Analyze rhetoric. Ship better videos.")
 
     # Read API key once and cache in session for UX transparency
     api_key = os.getenv("OPENAI_API_KEY", "")
